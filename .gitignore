@@ -1,0 +1,42 @@
+# ESP-IDF 构建文件
+build/
+sdkconfig
+sdkconfig.old
+const.h
+# IDE 配置文件
+.vscode/
+.idea/
+
+# 编译生成的文件
+*.o
+*.d
+*.pyc
+__pycache__/
+
+# 临时文件
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 二进制文件和固件
+*.bin
+*.elf
+*.map
+
+# 依赖文件目录
+managed_components/
+dependencies/
+
+# 私密配置文件（如包含密钥的文件）
+secrets.h
+credentials.h
+
+# 调试文件
+.gdb_history
