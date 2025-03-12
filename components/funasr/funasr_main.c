@@ -135,11 +135,9 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
                 bool is_final = cJSON_GetObjectItem(root, "is_final")->valueint;
                 
                 /* 打印基本信息 */
-                ESP_LOGI(TAG, "模式: %s", mode);
-                ESP_LOGI(TAG, "音频文件: %s", wav_name);
-                ESP_LOGI(TAG, "识别文本: %s", text);
-                ESP_LOGI(TAG, "是否最终结果: %d", is_final);
-
+                if (strcmp(mode, "2pass-offline") == 0) {
+                    ESP_LOGI(TAG, "识别文本: %s", text);
+                }
                 /* 处理时间戳信息(如果存在) */
                 cJSON *timestamp = cJSON_GetObjectItem(root, "timestamp");
                 if (timestamp != NULL) {

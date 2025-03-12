@@ -11,14 +11,9 @@
 #include <string.h>     // 字符串操作
 #include <stdlib.h>     // 标准库函数
 #include "freertos/FreeRTOS.h"  // FreeRTOS操作系统
+#include "freertos/task.h"
 #include "esp_log.h"    // ESP日志系统
-#include "board.h"      // 开发板配置
-#include "audio_common.h" // 音频通用定义
-#include "audio_pipeline.h" // 音频处理管道
-#include "i2s_stream.h"  // I2S流处理
-#include "raw_stream.h"  // 原始数据流处理
-#include "filter_resample.h" // 重采样过滤器
-#include "esp_vad.h"    // ESP VAD功能
+#include "driver/i2s.h"
 
 #include "audio_idf_version.h" // IDF版本信息
 #include "const.h"
@@ -32,172 +27,149 @@
 #include "funasr_main.h"
 
 /* 定义日志标签 */
-static const char *TAG = "EXAMPLE-VAD";
+static const char *TAG = "MIC-STREAM";
 
-/* VAD相关参数定义 */
-#define VAD_SAMPLE_RATE_HZ 16000    // VAD采样率(Hz)
-#define VAD_FRAME_LENGTH_MS 30      // VAD帧长度(毫秒)
-#define VAD_BUFFER_LENGTH (VAD_FRAME_LENGTH_MS * VAD_SAMPLE_RATE_HZ / 1000) // VAD缓冲区长度
+// I2S配置
+#define I2S_SAMPLE_RATE     48000  // 输入采样率
+#define TARGET_SAMPLE_RATE  16000  // 目标采样率
+#define I2S_CHANNEL_NUM     1      // 单声道输入
+#define I2S_BITS_PER_SAMPLE 16     // 每个采样16位
 
-// 语音识别结果回调函数
-static void speech_result_callback(const char *result, bool is_final) {
-    if (is_final) {
-        ESP_LOGI(TAG, "最终识别结果: %s", result);
-    } else {
-        ESP_LOGI(TAG, "中间识别结果: %s", result);
+// 缓冲区大小优化
+#define CHUNK_SIZE          960    // 每个数据块的大小
+#define BUFFER_SIZE         (CHUNK_SIZE * 3)  // 缓冲区大小为数据块的3倍
+#define RESAMPLED_POINTS    (CHUNK_SIZE * TARGET_SAMPLE_RATE / I2S_SAMPLE_RATE)  // 重采样后的点数
+#define RESAMPLED_BUFFER_SIZE (BUFFER_SIZE * TARGET_SAMPLE_RATE / I2S_SAMPLE_RATE + CHUNK_SIZE)  // 增加额外的CHUNK_SIZE作为安全边界
+
+// 重采样函数优化
+static void resample_data(int16_t *input, int input_len, int16_t *output, int channels) {
+    int step = (I2S_SAMPLE_RATE / TARGET_SAMPLE_RATE);
+    int j = 0;
+    
+    // 简单抽取重采样
+    for (int i = 0; i < input_len; i += step) {
+        output[j++] = input[i];
     }
 }
 
-void app_main()
-{
-    uint8_t voice_reading = 0;//语音识别状态
-    /* 设置日志级别 - 移到最开始的位置 */
-    esp_log_level_set("*", ESP_LOG_INFO);    // 所有组件设为信息级别
-    esp_log_level_set(TAG, ESP_LOG_INFO);    // VAD示例设为信息级别
-
-    // 初始化NVS Flash
-    esp_err_t ret = nvs_flash_init();
-    // 如果NVS分区没有足够空间或版本不匹配，则擦除重新初始化
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
-    }
-    // 检查NVS初始化结果
-    ESP_ERROR_CHECK(ret);
-
-    // 初始化网络接口
-    ESP_ERROR_CHECK(esp_netif_init());
-
-    // 初始化WiFi
-    app_wifi_init();
-    // 连接到指定WiFi网络
-    app_wifi_connect(WIFI_SSID, WIFI_PASSWORD);
-
-    /* 声明音频管道和音频元素句柄 */
-    audio_pipeline_handle_t pipeline;
-    audio_element_handle_t i2s_stream_reader, filter, raw_read;
-
-    /* 步骤1: 初始化编解码器芯片 */
-    ESP_LOGI(TAG, "[ 1 ] Start codec chip");
-    audio_board_handle_t board_handle = audio_board_init();
-    audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
-
-    /* 步骤2: 创建音频录制管道 */
-    ESP_LOGI(TAG, "[ 2 ] Create audio pipeline for recording");
-    audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
-    pipeline = audio_pipeline_init(&pipeline_cfg);
-    mem_assert(pipeline);
-
-    /* 步骤2.1: 创建I2S流读取器 */
-    ESP_LOGI(TAG, "[2.1] Create i2s stream to read audio data from codec chip");
-    i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT_WITH_PARA(CODEC_ADC_I2S_PORT, 48000, 16, AUDIO_STREAM_READER);
-    i2s_stream_reader = i2s_stream_init(&i2s_cfg);
-
-    /* 步骤2.2: 创建重采样过滤器 */
-    ESP_LOGI(TAG, "[2.2] Create filter to resample audio data");
-    rsp_filter_cfg_t rsp_cfg = DEFAULT_RESAMPLE_FILTER_CONFIG();
-    rsp_cfg.src_rate = 48000;       // 源采样率
-    rsp_cfg.src_ch = 2;             // 源通道数
-    rsp_cfg.dest_rate = VAD_SAMPLE_RATE_HZ;  // 目标采样率
-    rsp_cfg.dest_ch = 1;            // 目标通道数
-    filter = rsp_filter_init(&rsp_cfg);
-
-    /* 步骤2.3: 创建原始数据流接收器 */
-    ESP_LOGI(TAG, "[2.3] Create raw to receive data");
-    raw_stream_cfg_t raw_cfg = {
-        .out_rb_size = 8 * 1024,    // 输出环形缓冲区大小
-        .type = AUDIO_STREAM_READER, // 设置为读取器类型
+// 音频采集任务
+static void mic_task(void *arg) {
+    // I2S配置
+    i2s_config_t i2s_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_RX,
+        .sample_rate = I2S_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // 单声道
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,        // 增加DMA缓冲区数量
+        .dma_buf_len = 1024,       // 增加DMA缓冲区长度
+        .use_apll = true,          // 使用APLL提供更精确的采样率
+        .tx_desc_auto_clear = false,
+        .fixed_mclk = 0
     };
-    raw_read = raw_stream_init(&raw_cfg);
 
-    /* 步骤3: 注册所有元素到音频管道 */
-    ESP_LOGI(TAG, "[ 3 ] Register all elements to audio pipeline");
-    audio_pipeline_register(pipeline, i2s_stream_reader, "i2s");
-    audio_pipeline_register(pipeline, filter, "filter");
-    audio_pipeline_register(pipeline, raw_read, "raw");
+    // I2S引脚配置
+    i2s_pin_config_t pin_config = {
+        .bck_io_num = 9,     // BCK引脚
+        .ws_io_num = 45,     // WS引脚
+        .data_out_num = -1,  // 不使用输出
+        .data_in_num = 10    // DATA引脚
+    };
 
-    /* 步骤4: 链接各个元素 */
-    ESP_LOGI(TAG, "[ 4 ] Link elements together [codec_chip]-->i2s_stream-->filter-->raw-->[VAD]");
-    const char *link_tag[3] = {"i2s", "filter", "raw"};
-    audio_pipeline_link(pipeline, &link_tag[0], 3);
+    // 初始化I2S
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_NUM_0, &pin_config));
 
-    /* 步骤5: 启动音频管道 */
-    ESP_LOGI(TAG, "[ 5 ] Start audio_pipeline");
-    audio_pipeline_run(pipeline);
+    // 分配缓冲区
+    int16_t *raw_buffer = (int16_t *)malloc(BUFFER_SIZE * sizeof(int16_t));
+    int16_t *resampled_buffer = (int16_t *)malloc(RESAMPLED_BUFFER_SIZE * sizeof(int16_t));
+    size_t bytes_read = 0;  // 添加 bytes_read 变量声明
 
-    /* 步骤6: 初始化VAD句柄 */
-    ESP_LOGI(TAG, "[ 6 ] Initialize VAD handle");
-    vad_handle_t vad_inst = vad_create(VAD_MODE_3);  // 创建VAD实例，使用模式4(最严格)
-
-    /* 分配VAD缓冲区内存 */
-    int16_t *vad_buff = (int16_t *)malloc(VAD_BUFFER_LENGTH * sizeof(short));
-    if (vad_buff == NULL) {
-        ESP_LOGE(TAG, "Memory allocation failed!");
-        goto abort_speech_detection;
+    if (!raw_buffer || !resampled_buffer) {
+        ESP_LOGE(TAG, "内存分配失败!");
+        goto cleanup;
     }
+
     // 等待WiFi连接
     while (!app_wifi_get_connect_status()) {
         ESP_LOGI(TAG, "等待WiFi连接...");
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    // 获取IP地址
-    esp_netif_ip_info_t ip_info;
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif) {
-        ESP_ERROR_CHECK(esp_netif_get_ip_info(netif, &ip_info));
-        ESP_LOGI(TAG, "WiFi已连接, IP地址: " IPSTR, IP2STR(&ip_info.ip));
-    } else {
-        ESP_LOGE(TAG, "获取网络接口失败");
-        goto abort_speech_detection;
-    }
+    // 初始化WebSocket连接
     websocket_init(WEBSOCKET_URI, false);
-    vTaskDelay(pdMS_TO_TICKS(4000));
+    vTaskDelay(pdMS_TO_TICKS(2000));
     send_start_frame();
-    /* 主循环：持续进行语音检测 */
+
+    // 主循环
     while (1) {
-        // 从原始数据流读取音频数据
-        raw_stream_read(raw_read, (char *)vad_buff, VAD_BUFFER_LENGTH * sizeof(short));
-
-        // 将音频样本送入VAD处理并获取结果
-        vad_state_t vad_state = vad_process(vad_inst, vad_buff, VAD_SAMPLE_RATE_HZ, VAD_FRAME_LENGTH_MS);
-        if (vad_state == VAD_SPEECH) {    // 开启语音识别
-            // if(voice_reading == 0){
-            //     voice_reading = 1;
-            //     send_start_frame();
-            // }
-        }else{//没有检测到说话
+        // 读取I2S数据
+        esp_err_t ret = i2s_read(I2S_NUM_0, raw_buffer, BUFFER_SIZE * sizeof(int16_t), &bytes_read, 100 / portTICK_PERIOD_MS);
+        
+        if (ret == ESP_OK && bytes_read > 0) {
+            // 重采样
+            resample_data(raw_buffer, bytes_read / sizeof(int16_t), resampled_buffer, I2S_CHANNEL_NUM);
+            
+            // 计算实际重采样后的样本数
+            size_t samples = (bytes_read / sizeof(int16_t)) * TARGET_SAMPLE_RATE / I2S_SAMPLE_RATE;
+            size_t remaining_samples = samples;
+            size_t offset = 0;
+            
+            // 当累积了足够的数据时发送
+            while (remaining_samples >= CHUNK_SIZE) {
+                // 发送到服务器
+                websocket_send_audio((const uint8_t *)(resampled_buffer + offset), CHUNK_SIZE * sizeof(int16_t));
+                
+                offset += CHUNK_SIZE;
+                remaining_samples -= CHUNK_SIZE;
+            }
+            
+            // 如果还有剩余数据，移动到缓冲区开始位置
+            if (remaining_samples > 0 && offset > 0) {
+                memmove(resampled_buffer, resampled_buffer + offset, remaining_samples * sizeof(int16_t));
+            }
         }
-        websocket_send_audio( (const uint8_t *)vad_buff, VAD_BUFFER_LENGTH * sizeof(short));
+
+        // 让出一些CPU时间
+        vTaskDelay(1);
     }
+
+cleanup:
+    // 清理资源
+    if (raw_buffer) free(raw_buffer);
+    if (resampled_buffer) free(resampled_buffer);
+    i2s_driver_uninstall(I2S_NUM_0);
     websocket_cleanup();
-    /* 释放VAD缓冲区 */
-    free(vad_buff);
-    vad_buff = NULL;
+    vTaskDelete(NULL);
+}
 
-abort_speech_detection:
+void app_main()
+{
+    // 设置日志级别
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set(TAG, ESP_LOG_INFO);
 
-    /* 步骤7: 销毁VAD实例 */
-    ESP_LOGI(TAG, "[ 7 ] Destroy VAD");
-    vad_destroy(vad_inst);
+    // 初始化NVS Flash
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
 
-    /* 步骤8: 停止音频管道并释放所有资源 */
-    ESP_LOGI(TAG, "[ 8 ] Stop audio_pipeline and release all resources");
-    audio_pipeline_stop(pipeline);
-    audio_pipeline_wait_for_stop(pipeline);
-    audio_pipeline_terminate(pipeline);
+    // 初始化网络
+    ESP_ERROR_CHECK(esp_netif_init());
 
-    /* 在移除监听器之前终止管道 */
-    audio_pipeline_remove_listener(pipeline);
+    // 初始化WiFi
+    app_wifi_init();
+    app_wifi_connect(WIFI_SSID, WIFI_PASSWORD);
 
-    /* 注销所有音频元素 */
-    audio_pipeline_unregister(pipeline, i2s_stream_reader);
-    audio_pipeline_unregister(pipeline, filter);
-    audio_pipeline_unregister(pipeline, raw_read);
+    // 创建音频采集任务，增加堆栈大小
+    xTaskCreate(mic_task, "mic_task", 8192 * 2, NULL, 5, NULL);
 
-    /* 释放所有资源 */
-    audio_pipeline_deinit(pipeline);
-    audio_element_deinit(i2s_stream_reader);
-    audio_element_deinit(filter);
-    audio_element_deinit(raw_read);
+    // 主循环
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 让主任务休眠，避免看门狗超时
+    }
 }
