@@ -26,6 +26,21 @@
 #include "esp_timer.h"  // 添加ESP定时器头文件
 #include "funasr_main.h"
 
+// TTS相关头文件
+#include "esp_tts.h"
+#include "esp_tts_voice_xiaole.h"
+#include "esp_tts_voice_template.h"
+#include "esp_tts_player.h"
+// #include "esp_board_init.h"
+#include "ringbuf.h"
+#include "esp_audio.h"
+
+// 音频编码和分区相关头文件
+#include "wav_encoder.h"
+#include "esp_partition.h"
+#include "esp_idf_version.h"
+
+
 /* 定义日志标签 */
 static const char *TAG = "MIC-STREAM";
 
@@ -35,11 +50,23 @@ static const char *TAG = "MIC-STREAM";
 #define I2S_CHANNEL_NUM     1      // 单声道输入
 #define I2S_BITS_PER_SAMPLE 16     // 每个采样16位
 
+// I2S引脚定义
+#define I2S_MIC_BCK_IO      9      // MIC BCK
+#define I2S_MIC_WS_IO       45     // MIC WS
+#define I2S_MIC_DATA_IO     10     // MIC DATA
+#define I2S_SPK_BCK_IO      18     // 喇叭 BCK
+#define I2S_SPK_WS_IO       17     // 喇叭 WS/LRC
+#define I2S_SPK_DATA_IO     8      // 喇叭 DATA/DIN
+
 // 缓冲区大小优化
 #define CHUNK_SIZE          960    // 每个数据块的大小
 #define BUFFER_SIZE         (CHUNK_SIZE * 3)  // 缓冲区大小为数据块的3倍
 #define RESAMPLED_POINTS    (CHUNK_SIZE * TARGET_SAMPLE_RATE / I2S_SAMPLE_RATE)  // 重采样后的点数
 #define RESAMPLED_BUFFER_SIZE (BUFFER_SIZE * TARGET_SAMPLE_RATE / I2S_SAMPLE_RATE + CHUNK_SIZE)  // 增加额外的CHUNK_SIZE作为安全边界
+
+// 定义I2S端口
+#define I2S_MIC_PORT       I2S_NUM_0
+#define I2S_SPK_PORT       I2S_NUM_1
 
 // 重采样函数优化
 static void resample_data(int16_t *input, int input_len, int16_t *output, int channels) {
@@ -54,8 +81,28 @@ static void resample_data(int16_t *input, int input_len, int16_t *output, int ch
 
 // 音频采集任务
 static void mic_task(void *arg) {
-    // I2S配置
-    i2s_config_t i2s_config = {
+
+    // 分配缓冲区
+    // 分配原始音频数据缓冲区,大小为 BUFFER_SIZE * 2 字节(每个采样点16位)
+    int16_t *raw_buffer = (int16_t *)malloc(BUFFER_SIZE * sizeof(int16_t));
+    
+    // 分配重采样后的音频数据缓冲区,大小为 RESAMPLED_BUFFER_SIZE * 2 字节
+    // 缓冲区大小根据重采样比例调整,并额外增加一个CHUNK_SIZE作为安全边界
+    int16_t *resampled_buffer = (int16_t *)malloc(RESAMPLED_BUFFER_SIZE * sizeof(int16_t));
+    
+    // 用于跟踪实际读取的字节数
+    size_t bytes_read = 0;
+    
+    // 用于跟踪实际写入的字节数 
+    size_t bytes_written = 0;
+
+    if (!raw_buffer || !resampled_buffer) {
+        ESP_LOGE(TAG, "内存分配失败!");
+        goto cleanup;
+    }
+
+    // MIC I2S配置
+    i2s_config_t i2s_mic_config = {
         .mode = I2S_MODE_MASTER | I2S_MODE_RX,
         .sample_rate = I2S_SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE,
@@ -69,27 +116,95 @@ static void mic_task(void *arg) {
         .fixed_mclk = 0
     };
 
-    // I2S引脚配置
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = 9,     // BCK引脚
-        .ws_io_num = 45,     // WS引脚
-        .data_out_num = -1,  // 不使用输出
-        .data_in_num = 10    // DATA引脚
+    // 喇叭I2S配置
+    i2s_config_t i2s_spk_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_TX,
+        .sample_rate = I2S_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = 1024,
+        .use_apll = true,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0
+    };
+
+    // MIC I2S引脚配置
+    i2s_pin_config_t mic_pin_config = {
+        .bck_io_num = I2S_MIC_BCK_IO,
+        .ws_io_num = I2S_MIC_WS_IO,
+        .data_out_num = -1,
+        .data_in_num = I2S_MIC_DATA_IO
+    };
+
+    // 喇叭I2S引脚配置
+    i2s_pin_config_t spk_pin_config = {
+        .bck_io_num = I2S_SPK_BCK_IO,
+        .ws_io_num = I2S_SPK_WS_IO,
+        .data_out_num = I2S_SPK_DATA_IO,
+        .data_in_num = -1
     };
 
     // 初始化I2S
-    ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL));
-    ESP_ERROR_CHECK(i2s_set_pin(I2S_NUM_0, &pin_config));
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_MIC_PORT, &i2s_mic_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_MIC_PORT, &mic_pin_config));
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_SPK_PORT, &i2s_spk_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_SPK_PORT, &spk_pin_config));
 
-    // 分配缓冲区
-    int16_t *raw_buffer = (int16_t *)malloc(BUFFER_SIZE * sizeof(int16_t));
-    int16_t *resampled_buffer = (int16_t *)malloc(RESAMPLED_BUFFER_SIZE * sizeof(int16_t));
-    size_t bytes_read = 0;  // 添加 bytes_read 变量声明
+    /*** 1. 创建ESP TTS句柄 ***/
+    // 从分区表中查找voice_data分区
+    const esp_partition_t* part=esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "voice_data");
+    if (part==NULL) { 
+        ESP_LOGI(TAG, "Couldn't find voice data partition!"); 
+        goto cleanup;
+    } else {
+        // ESP_LOGI(TAG, "voice_data paration size:%d", part->size);
+    }
 
-    if (!raw_buffer || !resampled_buffer) {
-        ESP_LOGE(TAG, "内存分配失败!");
+    // 将voice_data分区映射到内存
+    void* voicedata;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    // ESP-IDF 5.0及以上版本使用新的API
+    esp_partition_mmap_handle_t mmap;
+    esp_err_t err=esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA, &voicedata, &mmap);
+#else
+    // ESP-IDF 5.0以下版本使用旧的API
+    spi_flash_mmap_handle_t mmap;
+    esp_err_t err=esp_partition_mmap(part, 0, part->size, SPI_FLASH_MMAP_DATA, &voicedata, &mmap);
+#endif
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG,"Couldn't map voice data partition!"); 
         goto cleanup;
     }
+
+    // 初始化语音模型
+    esp_tts_voice_t *voice=esp_tts_voice_set_init(&esp_tts_voice_template, (int16_t*)voicedata); 
+    esp_tts_handle_t *tts_handle=esp_tts_create(voice);
+
+    /*** 2. 播放欢迎提示语 ***/
+    char *prompt1="欢迎使用乐鑫语音合成";  
+    ESP_LOGI(TAG, "%s", prompt1);
+    if (esp_tts_parse_chinese(tts_handle, prompt1)) {
+            int len[1]={0};
+            do {
+                // 获取合成的音频数据
+                short *pcm_data=esp_tts_stream_play(tts_handle, len, 3);
+#ifdef SDCARD_OUTPUT_ENABLE
+                // 如果启用SD卡输出,将音频数据写入WAV文件
+                wav_encoder_run(wav_encoder, pcm_data, len[0]*2);
+#else
+                // 通过I2S接口播放音频数据
+                // esp_audio_play(pcm_data, len[0]*2, portMAX_DELAY);
+#endif
+            } while(len[0]>0);
+    }
+    // 重置TTS流
+    esp_tts_stream_reset(tts_handle);
+#ifdef SDCARD_OUTPUT_ENABLE
+    wav_encoder_close(wav_encoder);
+#endif
 
     // 等待WiFi连接
     while (!app_wifi_get_connect_status()) {
@@ -105,10 +220,13 @@ static void mic_task(void *arg) {
     // 主循环
     while (1) {
         // 读取I2S数据
-        esp_err_t ret = i2s_read(I2S_NUM_0, raw_buffer, BUFFER_SIZE * sizeof(int16_t), &bytes_read, 100 / portTICK_PERIOD_MS);
+        esp_err_t ret = i2s_read(I2S_MIC_PORT, raw_buffer, BUFFER_SIZE * sizeof(int16_t), &bytes_read, 100 / portTICK_PERIOD_MS);
         
         if (ret == ESP_OK && bytes_read > 0) {
-            // 重采样
+            // 直接播放原始音频
+            // i2s_write(I2S_SPK_PORT, raw_buffer, bytes_read, &bytes_written, 100 / portTICK_PERIOD_MS);
+            
+            // 重采样用于发送
             resample_data(raw_buffer, bytes_read / sizeof(int16_t), resampled_buffer, I2S_CHANNEL_NUM);
             
             // 计算实际重采样后的样本数
@@ -139,7 +257,8 @@ cleanup:
     // 清理资源
     if (raw_buffer) free(raw_buffer);
     if (resampled_buffer) free(resampled_buffer);
-    i2s_driver_uninstall(I2S_NUM_0);
+    i2s_driver_uninstall(I2S_MIC_PORT);
+    i2s_driver_uninstall(I2S_SPK_PORT);
     websocket_cleanup();
     vTaskDelete(NULL);
 }
