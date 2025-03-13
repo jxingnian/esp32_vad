@@ -40,6 +40,8 @@
 #include "esp_partition.h"
 #include "esp_idf_version.h"
 
+#include "doubao_tts.h"
+
 
 /* 定义日志标签 */
 static const char *TAG = "MIC-STREAM";
@@ -213,9 +215,9 @@ static void mic_task(void *arg) {
     }
 
     // 初始化WebSocket连接
-    websocket_init(WEBSOCKET_URI, false);
+    funasr_websocket_init(WEBSOCKET_URI, false);
     vTaskDelay(pdMS_TO_TICKS(2000));
-    send_start_frame();
+    funasr_send_start_frame();
 
     // 主循环
     while (1) {
@@ -237,7 +239,7 @@ static void mic_task(void *arg) {
             // 当累积了足够的数据时发送
             while (remaining_samples >= CHUNK_SIZE) {
                 // 发送到服务器
-                websocket_send_audio((const uint8_t *)(resampled_buffer + offset), CHUNK_SIZE * sizeof(int16_t));
+                funasr_websocket_send_audio((const uint8_t *)(resampled_buffer + offset), CHUNK_SIZE * sizeof(int16_t));
                 
                 offset += CHUNK_SIZE;
                 remaining_samples -= CHUNK_SIZE;
@@ -259,7 +261,7 @@ cleanup:
     if (resampled_buffer) free(resampled_buffer);
     i2s_driver_uninstall(I2S_MIC_PORT);
     i2s_driver_uninstall(I2S_SPK_PORT);
-    websocket_cleanup();
+    funasr_websocket_cleanup();
     vTaskDelete(NULL);
 }
 
