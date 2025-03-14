@@ -61,17 +61,17 @@ static void funasr_websocket_event_handler(void *handler_args, esp_event_base_t 
     switch (event_id) {
         case WEBSOCKET_EVENT_CONNECTED:
             /* WebSocket连接建立成功 */
-            ESP_LOGI(TAG, "WEBSOCKET_EVENT_CONNECTED");
+            ESP_LOGI(TAG, "FunASR: WEBSOCKET_EVENT_CONNECTED");
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
             /* WebSocket连接断开 */
-            ESP_LOGE(TAG, "WEBSOCKET_EVENT_DISCONNECTED: 连接断开");
-            ESP_LOGI(TAG, "正在尝试重新连接...");
+            ESP_LOGE(TAG, "FunASR: WEBSOCKET_EVENT_DISCONNECTED: 连接断开");
+            ESP_LOGI(TAG, "FunASR: 正在尝试重新连接...");
             
             /* 停止当前客户端 */
             esp_err_t stop_err = esp_websocket_client_stop(funasr_client);
             if (stop_err != ESP_OK) {
-                ESP_LOGE(TAG, "停止WebSocket客户端失败: %s", esp_err_to_name(stop_err));
+                ESP_LOGE(TAG, "FunASR: 停止WebSocket客户端失败: %s", esp_err_to_name(stop_err));
             }
             
             /* 使用保存的配置重新初始化并启动客户端 */
@@ -95,36 +95,36 @@ static void funasr_websocket_event_handler(void *handler_args, esp_event_base_t 
             /* 重新注册事件处理函数 */
             esp_err_t reg_err = esp_websocket_register_events(funasr_client, WEBSOCKET_EVENT_ANY, funasr_websocket_event_handler, NULL);
             if (reg_err != ESP_OK) {
-                ESP_LOGE(TAG, "注册事件处理函数失败: %s", esp_err_to_name(reg_err));
+                ESP_LOGE(TAG, "FunASR: 注册事件处理函数失败: %s", esp_err_to_name(reg_err));
                 break;
             }
             
             /* 启动客户端 */
             esp_err_t start_err = esp_websocket_client_start(funasr_client);
             if (start_err != ESP_OK) {
-                ESP_LOGE(TAG, "启动WebSocket客户端失败: %s", esp_err_to_name(start_err));
+                ESP_LOGE(TAG, "FunASR: 启动WebSocket客户端失败: %s", esp_err_to_name(start_err));
             }
             
             break;
         case WEBSOCKET_EVENT_DATA:
             /* 接收到WebSocket数据 */
-            ESP_LOGI(TAG, "WEBSOCKET_EVENT_DATA");
-            ESP_LOGI(TAG, "Received opcode=%d", data->op_code);
+            ESP_LOGI(TAG, "FunASR: WEBSOCKET_EVENT_DATA");
+            ESP_LOGI(TAG, "FunASR: Received opcode=%d", data->op_code);
             
             /* 检查是否为关闭帧(opcode 0x08)或心跳帧(opcode 0x0A) */
             if (data->op_code == 0x08 && data->data_len == 2) {
                 /* 解析关闭状态码(由两个字节组成) */
-                ESP_LOGW(TAG, "收到关闭消息,状态码=%d", 256*data->data_ptr[0] + data->data_ptr[1]);
+                ESP_LOGW(TAG, "FunASR: 收到关闭消息,状态码=%d", 256*data->data_ptr[0] + data->data_ptr[1]);
             } else if (data->op_code == 0x0A) {
                 /* 收到心跳帧,忽略处理 */
-                ESP_LOGI(TAG, "收到心跳帧");
+                ESP_LOGI(TAG, "FunASR: 收到心跳帧");
             } else if (data->data_ptr == NULL) {
-                ESP_LOGE(TAG, "接收到空数据");
+                ESP_LOGE(TAG, "FunASR: 接收到空数据");
             } else {
                 /* 解析接收到的JSON数据 */
                 cJSON *root = cJSON_Parse((char *)data->data_ptr);
                 if (root == NULL) {
-                    ESP_LOGE(TAG, "JSON解析失败");
+                    ESP_LOGE(TAG, "FunASR: JSON解析失败");
                     break;
                 }
 
@@ -134,13 +134,13 @@ static void funasr_websocket_event_handler(void *handler_args, esp_event_base_t 
                 
                 /* 打印基本信息 */
                 if (strcmp(mode, "2pass-offline") == 0) {
-                    ESP_LOGI(TAG, "识别文本: %s", text);
+                    ESP_LOGI(TAG, "FunASR: 识别文本: %s", text);
                 }
 
                 /* 处理时间戳信息(如果存在) */
                 cJSON *timestamp = cJSON_GetObjectItem(root, "timestamp");
                 if (timestamp != NULL) {
-                    ESP_LOGI(TAG, "时间戳: %s", timestamp->valuestring);
+                    ESP_LOGI(TAG, "FunASR: 时间戳: %s", timestamp->valuestring);
                 }
 
                 /* 处理句子级别时间戳(如果存在) */
@@ -154,7 +154,7 @@ static void funasr_websocket_event_handler(void *handler_args, esp_event_base_t 
                         int start = cJSON_GetObjectItem(sent, "start")->valueint;
                         int end = cJSON_GetObjectItem(sent, "end")->valueint;
                         
-                        ESP_LOGI(TAG, "句子[%d]: 文本=%s, 标点=%s, 开始=%d, 结束=%d", 
+                        ESP_LOGI(TAG, "FunASR: 句子[%d]: 文本=%s, 标点=%s, 开始=%d, 结束=%d", 
                                 i, text_seg, punc, start, end);
                     }
                 }
@@ -165,10 +165,10 @@ static void funasr_websocket_event_handler(void *handler_args, esp_event_base_t 
             break;
         case WEBSOCKET_EVENT_ERROR:
             /* WebSocket发生错误 */
-            ESP_LOGE(TAG, "WEBSOCKET_EVENT_ERROR: WebSocket连接发生错误");
+            ESP_LOGE(TAG, "FunASR: WEBSOCKET_EVENT_ERROR: WebSocket连接发生错误");
             if (data->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT) {
-                ESP_LOGE(TAG, "传输层错误, 错误码: %d", data->error_handle.esp_tls_last_esp_err);
-                ESP_LOGE(TAG, "报告的错误: %s", esp_err_to_name(data->error_handle.esp_tls_last_esp_err));
+                ESP_LOGE(TAG, "FunASR: 传输层错误, 错误码: %d", data->error_handle.esp_tls_last_esp_err);
+                ESP_LOGE(TAG, "FunASR: 报告的错误: %s", esp_err_to_name(data->error_handle.esp_tls_last_esp_err));
             }
             break;
     }
@@ -195,19 +195,20 @@ esp_err_t funasr_websocket_init(const char *uri , bool is_ssl)
 
     /* 配置WebSocket客户端参数 */
     esp_websocket_client_config_t websocket_cfg = {
-        .uri = funasr_ws_config.uri,
-        .disable_auto_reconnect = false,     /* 启用自动重连 */
-        .task_stack = 4096,                  /* WebSocket任务栈大小(字节) */
-        .task_prio = 5,                      /* WebSocket任务优先级(0-25,数字越大优先级越高) */
-        .buffer_size = 1024,                 /* 收发数据缓冲区大小(字节) */
-        .transport = funasr_ws_config.is_ssl ? WEBSOCKET_TRANSPORT_OVER_SSL : WEBSOCKET_TRANSPORT_OVER_TCP,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .uri = funasr_ws_config.uri,                             // WebSocket服务器的URI
+        .disable_auto_reconnect = false,                        // 启用自动重连
+        .task_stack = 4096,                                     // WebSocket任务栈大小(字节)
+        .task_prio = 5,                                         // WebSocket任务优先级(0-25,数字越大优先级越高)
+        .buffer_size = 1024,                                    // 收发数据缓冲区大小(字节)
+        .transport = funasr_ws_config.is_ssl ?                // 传输方式: 根据是否使用SSL选择
+            WEBSOCKET_TRANSPORT_OVER_SSL : WEBSOCKET_TRANSPORT_OVER_TCP,
+        .crt_bundle_attach = esp_crt_bundle_attach,            // 证书捆绑附加
     };
 
     /* 使用配置初始化WebSocket客户端 */
     funasr_client = esp_websocket_client_init(&websocket_cfg);
     if (funasr_client == NULL) {
-        ESP_LOGE(TAG, "Failed to initialize WebSocket client");
+        ESP_LOGE(TAG, "FunASR: Failed to initialize WebSocket client");
         return ESP_FAIL;
     }
 
@@ -217,7 +218,7 @@ esp_err_t funasr_websocket_init(const char *uri , bool is_ssl)
     /* 启动WebSocket客户端,开始连接服务器 */
     esp_err_t ret = esp_websocket_client_start(funasr_client);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start WebSocket client");
+        ESP_LOGE(TAG, "FunASR: Failed to start WebSocket client");
         return ret;
     }
 
@@ -247,7 +248,7 @@ esp_err_t funasr_send_start_frame() {
     cJSON_AddItemToObject(data, "chunk_size", chunk_size);
     
     char *json_str = cJSON_Print(data);
-    ESP_LOGI(TAG, "发送开始帧: %s", json_str);
+    ESP_LOGI(TAG, "FunASR: 发送开始帧: %s", json_str);
     
     int ret = esp_websocket_client_send_text(funasr_client, json_str, strlen(json_str), portMAX_DELAY);
     
@@ -267,7 +268,7 @@ esp_err_t funasr_send_finish_frame() {
     cJSON_AddStringToObject(data, "type", "end");
     
     char *json_str = cJSON_Print(data);
-    ESP_LOGI(TAG, "发送结束帧: %s", json_str);
+    ESP_LOGI(TAG, "FunASR: 发送结束帧: %s", json_str);
     
     int ret = esp_websocket_client_send_text(funasr_client, json_str, strlen(json_str), portMAX_DELAY);
     
@@ -292,7 +293,7 @@ esp_err_t funasr_websocket_send_audio(const uint8_t *data, size_t len)
 {
     /* 检查WebSocket客户端是否已连接 */
     if (!esp_websocket_client_is_connected(funasr_client)) {
-        ESP_LOGE(TAG, "WebSocket client not connected");
+        ESP_LOGE(TAG, "FunASR: WebSocket client not connected");
         /* 延时1秒后再返回失败 */
         vTaskDelay(pdMS_TO_TICKS(3000));
         return ESP_FAIL;
@@ -303,7 +304,7 @@ esp_err_t funasr_websocket_send_audio(const uint8_t *data, size_t len)
      */
     esp_err_t ret = esp_websocket_client_send_bin(funasr_client, (const char*)data, len, portMAX_DELAY);
     if (ret == -1) {
-        ESP_LOGE(TAG, "Failed to send data, error code: %d", ret);
+        ESP_LOGE(TAG, "FunASR: Failed to send data, error code: %d", ret);
         return ret;
     }
 

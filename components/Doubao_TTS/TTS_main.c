@@ -23,6 +23,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+// #include "driver/i2s.h"
 
 /* 日志标签 */
 static const char *TAG = "DOUBAO_TTS";
@@ -63,17 +64,19 @@ static void doubao_websocket_event_handler(void *handler_args, esp_event_base_t 
     switch (event_id) {
         case WEBSOCKET_EVENT_CONNECTED:
             /* WebSocket连接建立成功 */
-            ESP_LOGI(TAG, "WEBSOCKET_EVENT_CONNECTED");
+            ESP_LOGI(TAG, "DouBao TTS: WEBSOCKET_EVENT_CONNECTED");
+            // 注意：由于ESP-IDF的限制，我们无法直接获取响应头
+            // 建议通过其他方式（如服务器在消息中）获取logid
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
             /* WebSocket连接断开 */
-            ESP_LOGE(TAG, "WEBSOCKET_EVENT_DISCONNECTED: 连接断开");
-            ESP_LOGI(TAG, "正在尝试重新连接...");
+            ESP_LOGE(TAG, "DouBao TTS: WEBSOCKET_EVENT_DISCONNECTED: 连接断开");
+            ESP_LOGI(TAG, "DouBao TTS: 正在尝试重新连接...");
             
             /* 停止当前客户端 */
             esp_err_t stop_err = esp_websocket_client_stop(doubao_client);
             if (stop_err != ESP_OK) {
-                ESP_LOGE(TAG, "停止WebSocket客户端失败: %s", esp_err_to_name(stop_err));
+                ESP_LOGE(TAG, "DouBao TTS: 停止WebSocket客户端失败: %s", esp_err_to_name(stop_err));
             }
             
             /* 使用保存的配置重新初始化并启动客户端 */
@@ -94,50 +97,50 @@ static void doubao_websocket_event_handler(void *handler_args, esp_event_base_t 
             /* 重新初始化客户端 */
             doubao_client = esp_websocket_client_init(&websocket_cfg);
             if (doubao_client == NULL) {
-                ESP_LOGE(TAG, "重新初始化WebSocket客户端失败");
+                ESP_LOGE(TAG, "DouBao TTS: 重新初始化WebSocket客户端失败");
                 break;
             }
             
             /* 重新注册事件处理函数 */
             esp_err_t reg_err = esp_websocket_register_events(doubao_client, WEBSOCKET_EVENT_ANY, doubao_websocket_event_handler, NULL);
             if (reg_err != ESP_OK) {
-                ESP_LOGE(TAG, "注册事件处理函数失败: %s", esp_err_to_name(reg_err));
+                ESP_LOGE(TAG, "DouBao TTS: 注册事件处理函数失败: %s", esp_err_to_name(reg_err));
                 break;
             }
             
             /* 启动客户端 */
             esp_err_t start_err = esp_websocket_client_start(doubao_client);
             if (start_err != ESP_OK) {
-                ESP_LOGE(TAG, "启动WebSocket客户端失败: %s", esp_err_to_name(start_err));
+                ESP_LOGE(TAG, "DouBao TTS: 启动WebSocket客户端失败: %s", esp_err_to_name(start_err));
             }
             
             break;
         case WEBSOCKET_EVENT_DATA:
             /* 接收到WebSocket数据 */
-            ESP_LOGI(TAG, "WEBSOCKET_EVENT_DATA");
-            ESP_LOGI(TAG, "Received opcode=%d", data->op_code);
+            ESP_LOGI(TAG, "DouBao TTS: WEBSOCKET_EVENT_DATA");
+            ESP_LOGI(TAG, "DouBao TTS: Received opcode=%d", data->op_code);
             
             /* 检查是否为关闭帧(opcode 0x08)或心跳帧(opcode 0x0A) */
             if (data->op_code == 0x08 && data->data_len == 2) {
                 /* 解析关闭状态码(由两个字节组成) */
-                ESP_LOGW(TAG, "收到关闭消息,状态码=%d", 256*data->data_ptr[0] + data->data_ptr[1]);
+                ESP_LOGW(TAG, "DouBao TTS: 收到关闭消息,状态码=%d", 256*data->data_ptr[0] + data->data_ptr[1]);
             } else if (data->op_code == 0x0A) {
                 /* 收到心跳帧,忽略处理 */
-                ESP_LOGI(TAG, "收到心跳帧");
+                ESP_LOGI(TAG, "DouBao TTS: 收到心跳帧");
             } else if (data->data_ptr == NULL) {
-                ESP_LOGE(TAG, "接收到空数据");
+                ESP_LOGE(TAG, "DouBao TTS: 接收到空数据");
             } else if (data->op_code == 0x01) { // 文本帧
                 /* 解析接收到的JSON数据 */
                 cJSON *root = cJSON_Parse((char *)data->data_ptr);
                 if (root == NULL) {
-                    ESP_LOGE(TAG, "JSON解析失败");
+                    ESP_LOGE(TAG, "DouBao TTS: JSON解析失败");
                     break;
                 }
 
                 /* 获取响应状态 */
                 cJSON *code = cJSON_GetObjectItem(root, "code");
                 if (code && code->valueint != 0) {
-                    ESP_LOGE(TAG, "TTS错误: code=%d, message=%s", 
+                    ESP_LOGE(TAG, "DouBao TTS: TTS错误: code=%d, message=%s", 
                         code->valueint,
                         cJSON_GetObjectItem(root, "message")->valuestring);
                     cJSON_Delete(root);
@@ -150,7 +153,7 @@ static void doubao_websocket_event_handler(void *handler_args, esp_event_base_t 
                     const char *type = response_type->valuestring;
                     if (strcmp(type, "MetaInfo") == 0) {
                         /* 元信息响应 */
-                        ESP_LOGI(TAG, "收到元信息响应");
+                        ESP_LOGI(TAG, "DouBao TTS: 收到元信息响应");
                         cJSON *meta_info = cJSON_GetObjectItem(root, "meta_info");
                         if (meta_info) {
                             ESP_LOGI(TAG, "音频格式: %s", 
@@ -160,20 +163,24 @@ static void doubao_websocket_event_handler(void *handler_args, esp_event_base_t 
                         }
                     } else if (strcmp(type, "TaskEnd") == 0) {
                         /* 任务结束响应 */
-                        ESP_LOGI(TAG, "TTS合成任务完成");
+                        ESP_LOGI(TAG, "DouBao TTS: TTS合成任务完成");
                     }
                 }
 
                 cJSON_Delete(root);
             } else if (data->op_code == 0x02) { // 二进制帧
                 /* 处理音频数据 */
-                ESP_LOGI(TAG, "收到音频数据: %d字节", data->data_len);
-                // TODO: 在这里处理音频数据,例如写入文件或播放
+                ESP_LOGI(TAG, "DouBao TTS: 收到音频数据: %d字节", data->data_len);
+                
+                // 播放收到的音频数据
+                // size_t bytes_written = 0;
+                // i2s_write(I2S_NUM_1, data->data_ptr, data->data_len, &bytes_written, portMAX_DELAY);
+                // ESP_LOGI(TAG, "播放音频数据: %d字节", bytes_written);
             }
             break;
         case WEBSOCKET_EVENT_ERROR:
             /* WebSocket发生错误 */
-            ESP_LOGE(TAG, "WEBSOCKET_EVENT_ERROR: WebSocket连接发生错误");
+            ESP_LOGE(TAG, "DouBao TTS: WEBSOCKET_EVENT_ERROR: WebSocket连接发生错误");
             if (data->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT) {
                 ESP_LOGE(TAG, "传输层错误, 错误码: %d", data->error_handle.esp_tls_last_esp_err);
                 ESP_LOGE(TAG, "报告的错误: %s", esp_err_to_name(data->error_handle.esp_tls_last_esp_err));
@@ -182,7 +189,7 @@ static void doubao_websocket_event_handler(void *handler_args, esp_event_base_t 
     }
 }
 
-/* 发送开始帧 */
+/* 发送TTS请求 */
 esp_err_t doubao_send_tts_request(const char* text, const char* voice_name, float speed) {
     if (doubao_client == NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -231,25 +238,6 @@ esp_err_t doubao_send_tts_request(const char* text, const char* voice_name, floa
     return (ret > 0) ? ESP_OK : ESP_FAIL;
 }
 
-/* 发送结束帧 */
-esp_err_t doubao_send_finish_frame() {
-    if (doubao_client == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "request_type", "TaskEnd");
-    
-    char *json_str = cJSON_Print(root);
-    ESP_LOGI(TAG, "发送结束帧: %s", json_str);
-    
-    int ret = esp_websocket_client_send_text(doubao_client, json_str, strlen(json_str), portMAX_DELAY);
-    
-    free(json_str);
-    cJSON_Delete(root);
-    
-    return (ret > 0) ? ESP_OK : ESP_FAIL;
-}
 
 /**
  * @brief 清理并关闭WebSocket连接
@@ -302,19 +290,29 @@ esp_err_t doubao_websocket_init(const char *uri, bool is_ssl, const char *appid,
     doubao_ws_config.token[sizeof(doubao_ws_config.token) - 1] = '\0';
 
     /* 构建认证头 */
-    char auth_header[512];
-    snprintf(auth_header, sizeof(auth_header), "Bearer; %s", token);
+    static char auth_header[256];
+    snprintf(auth_header, sizeof(auth_header), "Bearer %s", token);
+    
+    ESP_LOGI(TAG, "连接URI: %s", uri);
+    ESP_LOGI(TAG, "认证头: %s", auth_header);
+    ESP_LOGI(TAG, "API路径: /api/v1/tts/ws_binary");
 
     /* 配置WebSocket客户端参数 */
-    esp_websocket_client_config_t websocket_cfg = {0};  // 使用{0}初始化所有字段
+    esp_websocket_client_config_t websocket_cfg = {0};
     websocket_cfg.uri = doubao_ws_config.uri;
-    websocket_cfg.disable_auto_reconnect = false;     /* 启用自动重连 */
-    websocket_cfg.task_stack = 4096;                  /* WebSocket任务栈大小(字节) */
-    websocket_cfg.task_prio = 5;                      /* WebSocket任务优先级(0-25,数字越大优先级越高) */
-    websocket_cfg.buffer_size = 1024 * 4;            /* 收发数据缓冲区大小(字节)，增大以支持更多音频数据 */
+    websocket_cfg.disable_auto_reconnect = false;
+    websocket_cfg.task_stack = 8192;
+    websocket_cfg.task_prio = 5;
+    websocket_cfg.buffer_size = 1024 * 4;
     websocket_cfg.transport = doubao_ws_config.is_ssl ? WEBSOCKET_TRANSPORT_OVER_SSL : WEBSOCKET_TRANSPORT_OVER_TCP;
+    websocket_cfg.cert_pem = NULL;
     websocket_cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    websocket_cfg.headers = auth_header;              /* 添加认证头 */
+    websocket_cfg.skip_cert_common_name_check = false;
+    websocket_cfg.headers = auth_header;              /* 使用正确的认证头 */
+    websocket_cfg.path = "/api/v1/tts/ws_binary";    /* 使用正确的TTS API路径 */
+    websocket_cfg.reconnect_timeout_ms = 10000;
+    websocket_cfg.network_timeout_ms = 10000;
+    websocket_cfg.ping_interval_sec = 10;  // 添加ping间隔
 
     /* 使用配置初始化WebSocket客户端 */
     doubao_client = esp_websocket_client_init(&websocket_cfg);
@@ -323,16 +321,21 @@ esp_err_t doubao_websocket_init(const char *uri, bool is_ssl, const char *appid,
         return ESP_FAIL;
     }
 
-    /* 注册事件处理函数,处理所有WebSocket事件 */
-    esp_websocket_register_events(doubao_client, WEBSOCKET_EVENT_ANY, doubao_websocket_event_handler, NULL);
+    /* 注册事件处理函数 */
+    esp_err_t reg_err = esp_websocket_register_events(doubao_client, WEBSOCKET_EVENT_ANY, doubao_websocket_event_handler, NULL);
+    if (reg_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register event handler");
+        return reg_err;
+    }
 
-    /* 启动WebSocket客户端,开始连接服务器 */
+    /* 启动WebSocket客户端 */
     esp_err_t ret = esp_websocket_client_start(doubao_client);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start WebSocket client");
         return ret;
     }
 
+    ESP_LOGI(TAG, "WebSocket客户端启动成功");
     return ESP_OK;
 }
 

@@ -31,13 +31,6 @@ esp_err_t doubao_websocket_init(const char *uri, bool is_ssl, const char *appid,
 esp_err_t doubao_send_tts_request(const char* text, const char* voice_name, float speed);
 
 /**
- * @brief 发送豆包TTS结束帧
- * 
- * @return esp_err_t ESP_OK:成功 ESP_FAIL:失败
- */
-esp_err_t doubao_send_finish_frame(void);
-
-/**
  * @brief 清理豆包TTS WebSocket连接
  */
 void doubao_websocket_cleanup(void);

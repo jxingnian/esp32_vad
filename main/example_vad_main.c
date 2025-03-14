@@ -53,12 +53,13 @@ static const char *TAG = "MIC-STREAM";
 #define I2S_BITS_PER_SAMPLE 16     // 每个采样16位
 
 // I2S引脚定义
-#define I2S_MIC_BCK_IO      9      // MIC BCK
-#define I2S_MIC_WS_IO       45     // MIC WS
-#define I2S_MIC_DATA_IO     10     // MIC DATA
-#define I2S_SPK_BCK_IO      18     // 喇叭 BCK
-#define I2S_SPK_WS_IO       17     // 喇叭 WS/LRC
-#define I2S_SPK_DATA_IO     8      // 喇叭 DATA/DIN
+#define I2S_MIC_BCK_IO      5      // MIC BCK
+#define I2S_MIC_WS_IO       4     // MIC WS
+#define I2S_MIC_DATA_IO     6     // MIC DATA
+
+#define I2S_SPK_BCK_IO      15     // 喇叭 BCK
+#define I2S_SPK_WS_IO       16     // 喇叭 WS/LRC
+#define I2S_SPK_DATA_IO     7      // 喇叭 DATA/DIN
 
 // 缓冲区大小优化
 #define CHUNK_SIZE          960    // 每个数据块的大小
@@ -190,17 +191,17 @@ static void mic_task(void *arg) {
     ESP_LOGI(TAG, "%s", prompt1);
     if (esp_tts_parse_chinese(tts_handle, prompt1)) {
             int len[1]={0};
-            do {
-                // 获取合成的音频数据
-                short *pcm_data=esp_tts_stream_play(tts_handle, len, 3);
-#ifdef SDCARD_OUTPUT_ENABLE
-                // 如果启用SD卡输出,将音频数据写入WAV文件
-                wav_encoder_run(wav_encoder, pcm_data, len[0]*2);
-#else
-                // 通过I2S接口播放音频数据
-                // esp_audio_play(pcm_data, len[0]*2, portMAX_DELAY);
-#endif
-            } while(len[0]>0);
+//             do {
+//                 // 获取合成的音频数据
+//                 short *pcm_data=esp_tts_stream_play(tts_handle, len, 3);
+// #ifdef SDCARD_OUTPUT_ENABLE
+//                 // 如果启用SD卡输出,将音频数据写入WAV文件
+//                 wav_encoder_run(wav_encoder, pcm_data, len[0]*2);
+// #else
+//                 // 通过I2S接口播放音频数据
+//                 // esp_audio_play(pcm_data, len[0]*2, portMAX_DELAY);
+// #endif
+//             } while(len[0]>0);
     }
     // 重置TTS流
     esp_tts_stream_reset(tts_handle);
@@ -216,9 +217,15 @@ static void mic_task(void *arg) {
 
     // 初始化WebSocket连接
     funasr_websocket_init(WEBSOCKET_URI, false);
+    doubao_websocket_init(DouBao_URI, true, DouBao_TTS_ADDID, DouBao_TTS_TOKEN);
     vTaskDelay(pdMS_TO_TICKS(2000));
     funasr_send_start_frame();
-
+    
+    // 添加测试代码：发送测试文本到豆包TTS服务
+    vTaskDelay(pdMS_TO_TICKS(2000)); // 等待连接稳定
+    ESP_LOGI(TAG, "发送测试文本到豆包TTS服务");
+    doubao_send_tts_request("这是一条测试语音合成消息，请问您能听到我说话吗？", "zh_male_rap", 1.0);
+    
     // 主循环
     while (1) {
         // 读取I2S数据

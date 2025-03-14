@@ -1,15 +1,27 @@
 
 main目录下添加 const.h 文件
 
+/*
+ * @Author: xingnian j_xingnian@163.com
+ * @Date: 2025-03-10 13:24:23
+ * @LastEditors: xingnian j_xingnian@163.com
+ * @LastEditTime: 2025-03-10 16:03:23
+ * @FilePath: \esp32_vad\main\const.h
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 #ifndef CONST_H
 #define CONST_H
 
-// 百度语音识别API参数
-#define BAIDU_APPID "appid"
-#define BAIDU_APPKEY "appkey"
-#define BAIDU_DEV_PID 15372 // 中文普通话，加强标点
-#define WIFI_SSID "wifi_ssid"
-#define WIFI_PASSWORD "wifi_password"
+#define WIFI_SSID "Goodmind"
+#define WIFI_PASSWORD "wifimima"
+
+#define WEBSOCKET_URI "ws://win.xingnian.vip:10096"
+
+#define DouBao_TTS_ADDID "2013524180"
+#define DouBao_TTS_TOKEN "32jGMq9t0hZz9nZpzKt1ZwLro-aTvY8W"
+#define VOICE_NAME zh_female_meilinvyou_moon_bigtts
+
+
 #endif
 
 
