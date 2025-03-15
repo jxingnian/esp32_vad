@@ -26,20 +26,6 @@
 #include "esp_timer.h"  // 添加ESP定时器头文件
 #include "funasr_main.h"
 
-// // TTS相关头文件
-// #include "esp_tts.h"
-// #include "esp_tts_voice_xiaole.h"
-// #include "esp_tts_voice_template.h"
-// #include "esp_tts_player.h"
-// // #include "esp_board_init.h"
-// #include "ringbuf.h"
-// #include "esp_audio.h"
-
-// // 音频编码和分区相关头文件
-// #include "wav_encoder.h"
-// #include "esp_partition.h"
-// #include "esp_idf_version.h"
-
 
 /* 定义日志标签 */
 static const char *TAG = "MIC-STREAM";
@@ -161,7 +147,7 @@ static void mic_task(void *arg) {
     }
 
     // 初始化WebSocket连接
-    funasr_websocket_init(WEBSOCKET_URI, false);
+    funasr_websocket_init(FUNASR_WEBSOCKET_URI, false);
     vTaskDelay(pdMS_TO_TICKS(2000));
     funasr_send_start_frame();
     
