@@ -26,21 +26,19 @@
 #include "esp_timer.h"  // 添加ESP定时器头文件
 #include "funasr_main.h"
 
-// TTS相关头文件
-#include "esp_tts.h"
-#include "esp_tts_voice_xiaole.h"
-#include "esp_tts_voice_template.h"
-#include "esp_tts_player.h"
-// #include "esp_board_init.h"
-#include "ringbuf.h"
-#include "esp_audio.h"
+// // TTS相关头文件
+// #include "esp_tts.h"
+// #include "esp_tts_voice_xiaole.h"
+// #include "esp_tts_voice_template.h"
+// #include "esp_tts_player.h"
+// // #include "esp_board_init.h"
+// #include "ringbuf.h"
+// #include "esp_audio.h"
 
-// 音频编码和分区相关头文件
-#include "wav_encoder.h"
-#include "esp_partition.h"
-#include "esp_idf_version.h"
-
-#include "doubao_tts.h"
+// // 音频编码和分区相关头文件
+// #include "wav_encoder.h"
+// #include "esp_partition.h"
+// #include "esp_idf_version.h"
 
 
 /* 定义日志标签 */
@@ -156,59 +154,6 @@ static void mic_task(void *arg) {
     ESP_ERROR_CHECK(i2s_driver_install(I2S_SPK_PORT, &i2s_spk_config, 0, NULL));
     ESP_ERROR_CHECK(i2s_set_pin(I2S_SPK_PORT, &spk_pin_config));
 
-    /*** 1. 创建ESP TTS句柄 ***/
-    // 从分区表中查找voice_data分区
-    const esp_partition_t* part=esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "voice_data");
-    if (part==NULL) { 
-        ESP_LOGI(TAG, "Couldn't find voice data partition!"); 
-        goto cleanup;
-    } else {
-        // ESP_LOGI(TAG, "voice_data paration size:%d", part->size);
-    }
-
-    // 将voice_data分区映射到内存
-    void* voicedata;
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-    // ESP-IDF 5.0及以上版本使用新的API
-    esp_partition_mmap_handle_t mmap;
-    esp_err_t err=esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA, &voicedata, &mmap);
-#else
-    // ESP-IDF 5.0以下版本使用旧的API
-    spi_flash_mmap_handle_t mmap;
-    esp_err_t err=esp_partition_mmap(part, 0, part->size, SPI_FLASH_MMAP_DATA, &voicedata, &mmap);
-#endif
-    if (err != ESP_OK) {
-        ESP_LOGI(TAG,"Couldn't map voice data partition!"); 
-        goto cleanup;
-    }
-
-    // 初始化语音模型
-    esp_tts_voice_t *voice=esp_tts_voice_set_init(&esp_tts_voice_template, (int16_t*)voicedata); 
-    esp_tts_handle_t *tts_handle=esp_tts_create(voice);
-
-    /*** 2. 播放欢迎提示语 ***/
-    char *prompt1="欢迎使用乐鑫语音合成";  
-    ESP_LOGI(TAG, "%s", prompt1);
-    if (esp_tts_parse_chinese(tts_handle, prompt1)) {
-            int len[1]={0};
-//             do {
-//                 // 获取合成的音频数据
-//                 short *pcm_data=esp_tts_stream_play(tts_handle, len, 3);
-// #ifdef SDCARD_OUTPUT_ENABLE
-//                 // 如果启用SD卡输出,将音频数据写入WAV文件
-//                 wav_encoder_run(wav_encoder, pcm_data, len[0]*2);
-// #else
-//                 // 通过I2S接口播放音频数据
-//                 // esp_audio_play(pcm_data, len[0]*2, portMAX_DELAY);
-// #endif
-//             } while(len[0]>0);
-    }
-    // 重置TTS流
-    esp_tts_stream_reset(tts_handle);
-#ifdef SDCARD_OUTPUT_ENABLE
-    wav_encoder_close(wav_encoder);
-#endif
-
     // 等待WiFi连接
     while (!app_wifi_get_connect_status()) {
         ESP_LOGI(TAG, "等待WiFi连接...");
@@ -217,14 +162,8 @@ static void mic_task(void *arg) {
 
     // 初始化WebSocket连接
     funasr_websocket_init(WEBSOCKET_URI, false);
-    doubao_websocket_init(DouBao_URI, true, DouBao_TTS_ADDID, DouBao_TTS_TOKEN);
     vTaskDelay(pdMS_TO_TICKS(2000));
     funasr_send_start_frame();
-    
-    // 添加测试代码：发送测试文本到豆包TTS服务
-    vTaskDelay(pdMS_TO_TICKS(2000)); // 等待连接稳定
-    ESP_LOGI(TAG, "发送测试文本到豆包TTS服务");
-    doubao_send_tts_request("这是一条测试语音合成消息，请问您能听到我说话吗？", "zh_male_rap", 1.0);
     
     // 主循环
     while (1) {

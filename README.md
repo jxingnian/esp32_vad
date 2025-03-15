@@ -12,15 +12,10 @@ main目录下添加 const.h 文件
 #ifndef CONST_H
 #define CONST_H
 
-#define WIFI_SSID "Goodmind"
-#define WIFI_PASSWORD "wifimima"
+#define WIFI_SSID "ssid"
+#define WIFI_PASSWORD "password"
 
-#define WEBSOCKET_URI "ws://win.xingnian.vip:10096"
-
-#define DouBao_TTS_ADDID "2013524180"
-#define DouBao_TTS_TOKEN "32jGMq9t0hZz9nZpzKt1ZwLro-aTvY8W"
-#define VOICE_NAME zh_female_meilinvyou_moon_bigtts
-
+#define WEBSOCKET_URI "your_url"
 
 #endif
 
