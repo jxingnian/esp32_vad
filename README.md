@@ -23,3 +23,10 @@ main目录下添加 const.h 文件
 
 部署语音转文字-参考文档
 https://github.com/modelscope/FunASR/blob/main/runtime/docs/websocket_protocol_zh.md
+
+豆包-参考文档
+https://www.volcengine.com/docs/6561/1257584
+
+websocket-参考文档
+https://docs.espressif.com/projects/esp-protocols/esp_websocket_client/docs/latest/index.html
+

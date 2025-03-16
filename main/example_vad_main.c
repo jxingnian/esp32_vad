@@ -25,6 +25,7 @@
 #include "app_wifi.h"
 #include "esp_timer.h"  // 添加ESP定时器头文件
 #include "funasr_main.h"
+#include "doubao_main.h"
 
 
 /* 定义日志标签 */
@@ -63,6 +64,18 @@ static void resample_data(int16_t *input, int input_len, int16_t *output, int ch
     // 简单抽取重采样
     for (int i = 0; i < input_len; i += step) {
         output[j++] = input[i];
+    }
+}
+
+/* 音频数据回调处理 */
+static void audio_data_callback(const uint8_t *audio_data, size_t len)
+{
+    size_t bytes_written = 0;
+    
+    // 将音频数据写入I2S喇叭
+    esp_err_t ret = i2s_write(I2S_SPK_PORT, audio_data, len, &bytes_written, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2S写入失败: %d", ret);
     }
 }
 
@@ -106,14 +119,14 @@ static void mic_task(void *arg) {
     // 喇叭I2S配置
     i2s_config_t i2s_spk_config = {
         .mode = I2S_MODE_MASTER | I2S_MODE_TX,
-        .sample_rate = I2S_SAMPLE_RATE,
+        .sample_rate = 24000,  // 设置为24kHz，与TTS服务返回的音频匹配
         .bits_per_sample = I2S_BITS_PER_SAMPLE,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 8,
         .dma_buf_len = 1024,
-        .use_apll = true,
+        .use_apll = true,  // 使用APLL获得更准确的时钟
         .tx_desc_auto_clear = true,
         .fixed_mclk = 0
     };
@@ -148,8 +161,19 @@ static void mic_task(void *arg) {
 
     // 初始化WebSocket连接
     funasr_websocket_init(FUNASR_WEBSOCKET_URI, false);
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    // 设置豆包TTS音频回调
+    doubao_tts_set_audio_callback(audio_data_callback);
+    
+    // 初始化豆包TTS
+    doubao_tts_init(DOUBAO_WEBSOCKET_URI);
+    vTaskDelay(pdMS_TO_TICKS(3000));
     funasr_send_start_frame();
+    
+    // 测试TTS功能
+    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_daimengchuanmei_moon_bigtts");//呆萌川妹
+    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_sajiaonvyou_moon_bigtts");//柔美女友
+    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_meilinvyou_moon_bigtts");//魅力女友
+    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_yuanqinvyou_moon_bigtts");//撒娇学妹
     
     // 主循环
     while (1) {
