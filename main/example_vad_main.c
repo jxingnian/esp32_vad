@@ -25,6 +25,7 @@
 #include "app_wifi.h"
 #include "esp_timer.h"  // 添加ESP定时器头文件
 #include "funasr_main.h"
+#include "ollama_main.h"
 
 
 /* 定义日志标签 */
@@ -146,11 +147,14 @@ static void mic_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
+    // 初始化Ollama客户端
+    ESP_ERROR_CHECK(ollama_init(OLLAMA_URI));
+
     // 初始化WebSocket连接
     funasr_websocket_init(FUNASR_WEBSOCKET_URI, false);
     vTaskDelay(pdMS_TO_TICKS(2000));
     funasr_send_start_frame();
-    
+    ollama_chat("你好");
     // 主循环
     while (1) {
         // 读取I2S数据

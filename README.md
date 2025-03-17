@@ -1,3 +1,11 @@
+<!--
+ * @Author: xingnian j_xingnian@163.com
+ * @Date: 2025-03-10 12:50:13
+ * @LastEditors: xingnian j_xingnian@163.com
+ * @LastEditTime: 2025-03-17 14:41:35
+ * @FilePath: \esp32_vad\README.md
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+-->
 
 /*
  * @Author: xingnian j_xingnian@163.com
@@ -17,9 +25,12 @@ main目录下添加 const.h 文件
 #define WIFI_PASSWORD "password"
 
 #define WEBSOCKET_URI "your_url"
+#define OLLAMA_URI "your_url"
 
 #endif
 
 
 部署语音转文字-参考文档
 https://github.com/modelscope/FunASR/blob/main/runtime/docs/websocket_protocol_zh.md
+
+大模型部署：https://ollama.com/library/qwen:0.5b

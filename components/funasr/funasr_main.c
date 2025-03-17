@@ -22,6 +22,7 @@
 #include "esp_log.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "ollama_main.h"
 
 /* 日志标签 */
 static const char *TAG = "FUNASR_WEBSOCKET";
@@ -135,6 +136,7 @@ static void funasr_websocket_event_handler(void *handler_args, esp_event_base_t 
                 /* 打印基本信息 */
                 if (strcmp(mode, "2pass-offline") == 0) {
                     ESP_LOGI(TAG, "FunASR: 识别文本: %s", text);
+                    ollama_chat(text);
                 }
 
                 /* 处理时间戳信息(如果存在) */
