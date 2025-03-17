@@ -28,6 +28,13 @@
 
 #include "ollama_main.h"
 
+#include "esp_tts.h"                  // 语音合成库头文件
+#include "esp_tts_voice_xiaole.h"     // 小乐音色配置
+#include "esp_tts_voice_template.h"   // 语音模板
+
+#include "wav_encoder.h"              // WAV编码器
+#include "esp_partition.h"            // 分区表操作
+#include "esp_idf_version.h"          // ESP-IDF版本信息
 
 /* 定义日志标签 */
 static const char *TAG = "MIC-STREAM";
@@ -56,6 +63,48 @@ static const char *TAG = "MIC-STREAM";
 // 定义I2S端口
 #define I2S_MIC_PORT       I2S_NUM_0
 #define I2S_SPK_PORT       I2S_NUM_1
+
+// 全局TTS句柄
+static esp_tts_handle_t *g_tts_handle = NULL;
+
+// Ollama响应回调函数
+static void ollama_response_handler(const char *response)
+{
+    if (!response) {
+        return;
+    }
+    
+    ESP_LOGI(TAG, "收到Ollama响应: %s", response);
+    
+    // 如果TTS句柄有效，使用TTS播放响应
+    if (g_tts_handle) {
+        // 分配缓冲区用于播放
+        int16_t *audio_buffer = malloc(8192 * sizeof(int16_t));
+        if (!audio_buffer) {
+            ESP_LOGE(TAG, "无法分配音频缓冲区");
+            return;
+        }
+        
+        // 解析中文文本并播放
+        if (esp_tts_parse_chinese(g_tts_handle, response)) {
+            int len[1] = {0};
+            size_t bytes_written = 0;
+            
+            do {
+                short *pcm_data = esp_tts_stream_play(g_tts_handle, len, 1);
+                if (pcm_data && len[0] > 0) {
+                    // 复制数据到缓冲区并通过I2S播放
+                    memcpy(audio_buffer, pcm_data, len[0] * 2);
+                    i2s_write(I2S_SPK_PORT, audio_buffer, len[0] * 2, &bytes_written, 100 / portTICK_PERIOD_MS);
+                }
+            } while (len[0] > 0);
+        }
+        
+        // 重置TTS流
+        esp_tts_stream_reset(g_tts_handle);
+        free(audio_buffer);
+    }
+}
 
 // 重采样函数优化
 static void resample_data(int16_t *input, int input_len, int16_t *output, int channels) {
@@ -147,15 +196,62 @@ static void mic_task(void *arg) {
         ESP_LOGI(TAG, "等待WiFi连接...");
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    /*** 1. 创建语音合成句柄 ***/
+    // 从voice_data分区加载语音数据
+    // 查找名为"voice_data"的数据分区
+    const esp_partition_t* part=esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "voice_data");
+    if (part==NULL) { 
+        printf("Couldn't find voice data partition!\n"); // 找不到voice_data分区时报错
+    } else {
+        printf("voice_data paration size:%ld\n", part->size); // 打印分区大小
+    }
+    void* voicedata; // 用于存储语音数据的指针
+    
+    // 用于存储内存映射句柄
+    esp_partition_mmap_handle_t mmap;
+    // 将分区数据映射到内存中,便于访问
+    esp_err_t err=esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA, &voicedata, &mmap);
 
+    if (err != ESP_OK) {
+        printf("Couldn't map voice data partition!\n"); // 内存映射失败时报错
+    }
+    // 使用语音模板和映射的语音数据初始化语音配置
+    esp_tts_voice_t *voice=esp_tts_voice_set_init(&esp_tts_voice_xiaole, (int16_t*)voicedata); 
+    
+    // 使用初始化好的语音配置创建TTS句柄,用于后续语音合成
+    g_tts_handle = esp_tts_create(voice);
+
+    /*** 2. 播放欢迎提示语 ***/
+    char *prompt1="你好,我是小豆包";  // 定义欢迎语
+    printf("%s\n", prompt1); // 在控制台打印欢迎语
+    // 解析中文文本
+    if (esp_tts_parse_chinese(g_tts_handle, prompt1)) {
+            int len[1]={0}; // 用于存储生成的音频数据长度
+            do {
+                // 获取合成的PCM音频数据流
+                short *pcm_data = esp_tts_stream_play(g_tts_handle, len, 2);
+                // esp_audio_play(pcm_data, len[0]*2, portMAX_DELAY); // 注释掉的音频播放接口
+                
+                // 将PCM数据复制到原始缓冲区
+                memcpy(raw_buffer, pcm_data, len[0]*2);
+                // 通过I2S接口输出音频数据到扬声器
+                i2s_write(I2S_SPK_PORT, raw_buffer, len[0]*2, &bytes_written, 100 / portTICK_PERIOD_MS);
+            } while(len[0]>0); // 持续处理直到所有音频数据都播放完
+    }
+    // 重置TTS流,为下一次合成做准备
+    esp_tts_stream_reset(g_tts_handle);
+    
     // 初始化Ollama客户端
     ESP_ERROR_CHECK(ollama_init(OLLAMA_URI));
+    
+    // 设置Ollama响应回调函数
+    ollama_set_response_callback(ollama_response_handler);
 
     // 初始化WebSocket连接
     funasr_websocket_init(FUNASR_WEBSOCKET_URI, false);
     vTaskDelay(pdMS_TO_TICKS(3000));
     funasr_send_start_frame();
-    ollama_chat("你好");
+    // ollama_chat("你好");
     // 主循环
     while (1) {
         // 读取I2S数据
