@@ -10,4 +10,5 @@ idf_component_register(
     REQUIRES         
         esp_websocket_client
         json
+        ollama
 )

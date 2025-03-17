@@ -25,7 +25,8 @@
 #include "app_wifi.h"
 #include "esp_timer.h"  // 添加ESP定时器头文件
 #include "funasr_main.h"
-#include "doubao_main.h"
+
+#include "ollama_main.h"
 
 
 /* 定义日志标签 */
@@ -64,18 +65,6 @@ static void resample_data(int16_t *input, int input_len, int16_t *output, int ch
     // 简单抽取重采样
     for (int i = 0; i < input_len; i += step) {
         output[j++] = input[i];
-    }
-}
-
-/* 音频数据回调处理 */
-static void audio_data_callback(const uint8_t *audio_data, size_t len)
-{
-    size_t bytes_written = 0;
-    
-    // 将音频数据写入I2S喇叭
-    esp_err_t ret = i2s_write(I2S_SPK_PORT, audio_data, len, &bytes_written, portMAX_DELAY);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2S写入失败: %d", ret);
     }
 }
 
@@ -159,22 +148,14 @@ static void mic_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
+    // 初始化Ollama客户端
+    ESP_ERROR_CHECK(ollama_init(OLLAMA_URI));
+
     // 初始化WebSocket连接
     funasr_websocket_init(FUNASR_WEBSOCKET_URI, false);
-    // 设置豆包TTS音频回调
-    doubao_tts_set_audio_callback(audio_data_callback);
-    
-    // 初始化豆包TTS
-    doubao_tts_init(DOUBAO_WEBSOCKET_URI);
     vTaskDelay(pdMS_TO_TICKS(3000));
     funasr_send_start_frame();
-    
-    // 测试TTS功能
-    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_daimengchuanmei_moon_bigtts");//呆萌川妹
-    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_sajiaonvyou_moon_bigtts");//柔美女友
-    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_meilinvyou_moon_bigtts");//魅力女友
-    doubao_tts_request("你好，我是小豆包，这是一条测试语音。", "zh_female_yuanqinvyou_moon_bigtts");//撒娇学妹
-    
+    ollama_chat("你好");
     // 主循环
     while (1) {
         // 读取I2S数据
