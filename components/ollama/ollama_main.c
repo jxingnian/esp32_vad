@@ -41,6 +41,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                             break;
                         }
                         
+                        // 累积文本
                         if (s_accumulated_text == NULL) {
                             s_accumulated_text = strdup(text);
                             if (s_accumulated_text) {
@@ -55,14 +56,25 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                                 s_accumulated_len = new_len;
                             }
                         }
+
+                        // 如果收到句号，触发回调
+                        if (strcmp(text, "。") == 0 && s_response_callback && s_accumulated_text) {
+                            ESP_LOGI(TAG, "收到句号，处理累积文本: %s", s_accumulated_text);
+                            s_response_callback(s_accumulated_text);
+                            
+                            // 清理累积的文本
+                            free(s_accumulated_text);
+                            s_accumulated_text = NULL;
+                            s_accumulated_len = 0;
+                        }
                     }
                 }
                 
                 // 检查是否完成
                 cJSON *done = cJSON_GetObjectItem(root, "done");
                 if (done && cJSON_IsTrue(done) && s_response_callback && s_accumulated_text) {
-                    // 处理累积的文本
-                    ESP_LOGI(TAG, "处理累积文本: %s", s_accumulated_text);
+                    // 如果还有未处理的文本，处理它
+                    ESP_LOGI(TAG, "会话结束，处理剩余文本: %s", s_accumulated_text);
                     s_response_callback(s_accumulated_text);
                     
                     // 清理累积的文本
@@ -72,69 +84,19 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
                 }
                 
                 cJSON_Delete(root);
-            } else {
-                // 如果不是完整的JSON，则累积数据
-                if (response_buffer == NULL) {
-                    response_buffer = malloc(evt->data_len + 1);
-                    if (response_buffer) {
-                        memcpy(response_buffer, evt->data, evt->data_len);
-                        response_len = evt->data_len;
-                        response_buffer[response_len] = 0;
-                    }
-                } else {
-                    char *new_buffer = realloc(response_buffer, response_len + evt->data_len + 1);
-                    if (new_buffer) {
-                        response_buffer = new_buffer;
-                        memcpy(response_buffer + response_len, evt->data, evt->data_len);
-                        response_len += evt->data_len;
-                        response_buffer[response_len] = 0;
-                    }
-                }
             }
             break;
             
         case HTTP_EVENT_ON_FINISH:
-            // 请求完成，处理累积的数据
+            // 请求完成，如果还有未处理的文本则处理
+            if (s_accumulated_text && s_response_callback) {
+                ESP_LOGI(TAG, "请求完成，处理剩余文本: %s", s_accumulated_text);
+                s_response_callback(s_accumulated_text);
+                free(s_accumulated_text);
+                s_accumulated_text = NULL;
+                s_accumulated_len = 0;
+            }
             if (response_buffer) {
-                cJSON *root = cJSON_Parse(response_buffer);
-                if (root) {
-                    // 检查是否有响应文本
-                    cJSON *response = cJSON_GetObjectItem(root, "response");
-                    if (response && cJSON_IsString(response)) {
-                        const char *text = response->valuestring;
-                        if (text && strlen(text) > 0) {
-                            if (s_accumulated_text == NULL) {
-                                s_accumulated_text = strdup(text);
-                                if (s_accumulated_text) {
-                                    s_accumulated_len = strlen(text);
-                                }
-                            } else {
-                                size_t new_len = s_accumulated_len + strlen(text);
-                                char *new_buffer = realloc(s_accumulated_text, new_len + 1);
-                                if (new_buffer) {
-                                    s_accumulated_text = new_buffer;
-                                    strcat(s_accumulated_text, text);
-                                    s_accumulated_len = new_len;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // 检查是否完成
-                    cJSON *done = cJSON_GetObjectItem(root, "done");
-                    if (done && cJSON_IsTrue(done) && s_response_callback && s_accumulated_text) {
-                        // 处理累积的文本
-                        ESP_LOGI(TAG, "处理累积文本: %s", s_accumulated_text);
-                        s_response_callback(s_accumulated_text);
-                        
-                        // 清理累积的文本
-                        free(s_accumulated_text);
-                        s_accumulated_text = NULL;
-                        s_accumulated_len = 0;
-                    }
-                    
-                    cJSON_Delete(root);
-                }
                 free(response_buffer);
                 response_buffer = NULL;
                 response_len = 0;
@@ -151,7 +113,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
             
             // 如果连接断开但还有累积的文本，也触发回调
             if (s_accumulated_text && s_response_callback) {
-                ESP_LOGI(TAG, "连接断开，处理累积文本: %s", s_accumulated_text);
+                ESP_LOGI(TAG, "连接断开，处理剩余文本: %s", s_accumulated_text);
                 s_response_callback(s_accumulated_text);
                 free(s_accumulated_text);
                 s_accumulated_text = NULL;

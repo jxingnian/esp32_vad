@@ -29,7 +29,6 @@
 #include "ollama_main.h"
 
 #include "esp_tts.h"                  // 语音合成库头文件
-#include "esp_tts_voice_xiaole.h"     // 小乐音色配置
 #include "esp_tts_voice_template.h"   // 语音模板
 
 #include "wav_encoder.h"              // WAV编码器
@@ -91,7 +90,7 @@ static void ollama_response_handler(const char *response)
             size_t bytes_written = 0;
             
             do {
-                short *pcm_data = esp_tts_stream_play(g_tts_handle, len, 1);
+                short *pcm_data = esp_tts_stream_play(g_tts_handle, len, 3);
                 if (pcm_data && len[0] > 0) {
                     // 复制数据到缓冲区并通过I2S播放
                     memcpy(audio_buffer, pcm_data, len[0] * 2);
@@ -157,7 +156,7 @@ static void mic_task(void *arg) {
     // 喇叭I2S配置
     i2s_config_t i2s_spk_config = {
         .mode = I2S_MODE_MASTER | I2S_MODE_TX,
-        .sample_rate = 24000,  // 设置为24kHz，与TTS服务返回的音频匹配
+        .sample_rate = 16000,  // 设置为16kHz
         .bits_per_sample = I2S_BITS_PER_SAMPLE,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
@@ -216,9 +215,13 @@ static void mic_task(void *arg) {
         printf("Couldn't map voice data partition!\n"); // 内存映射失败时报错
     }
     // 使用语音模板和映射的语音数据初始化语音配置
-    esp_tts_voice_t *voice=esp_tts_voice_set_init(&esp_tts_voice_xiaole, (int16_t*)voicedata); 
+    esp_tts_voice_t *voice = esp_tts_voice_set_init(&esp_tts_voice_template, (int16_t*)voicedata);
+    if (voice == NULL) {
+        ESP_LOGE(TAG, "Failed to init voice set");
+        goto cleanup;
+    }
     
-    // 使用初始化好的语音配置创建TTS句柄,用于后续语音合成
+    // 使用初始化好的语音配置创建TTS句柄
     g_tts_handle = esp_tts_create(voice);
 
     /*** 2. 播放欢迎提示语 ***/
@@ -229,7 +232,7 @@ static void mic_task(void *arg) {
             int len[1]={0}; // 用于存储生成的音频数据长度
             do {
                 // 获取合成的PCM音频数据流
-                short *pcm_data = esp_tts_stream_play(g_tts_handle, len, 2);
+                short *pcm_data = esp_tts_stream_play(g_tts_handle, len, 3);
                 // esp_audio_play(pcm_data, len[0]*2, portMAX_DELAY); // 注释掉的音频播放接口
                 
                 // 将PCM数据复制到原始缓冲区
